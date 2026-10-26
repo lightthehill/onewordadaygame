@@ -169,7 +169,7 @@
           <input 
             type="text" 
             id="wordInput" 
-            placeholder="단어 입력 (날짜편집: 2026-10-22햄버거)" 
+            placeholder="단어 입력 (날짜지정: 2026-10-22햄버거)" 
             class="w-full text-xs outline-none font-normal bg-transparent"
             onkeydown="handleKeyDown(event)"
             oninput="handleInput(event)"
@@ -187,7 +187,7 @@
   </div>
 
   <script>
-    const STORAGE_KEY = 'ONE_WORD_STAIR_FINAL_V8';
+    const STORAGE_KEY = 'ONE_WORD_STAIR_FINAL_V9';
 
     function getRandomPastelBg() {
       const hue = Math.floor(Math.random() * 360);
@@ -351,7 +351,7 @@
 
       const curMonthData = state.monthData[realYM];
       if (curMonthData && curMonthData.completedDays[realDay]) {
-        state.currentDraftWords = [...curMonthData.completedDays[realDay]];
+        state.currentDraftWords = [...curMonthData.completedDays[realDay].filter(w => !w.isDateInput)];
       } else {
         state.currentDraftWords = [];
       }
@@ -415,14 +415,21 @@
       }
 
       if (state.currentDraftWords.length < 10) {
-        state.currentDraftWords.push({
+        const newWordObj = {
           text: val,
-          bg: getRandomPastelBg()
-        });
+          bg: getRandomPastelBg(),
+          isDateInput: false
+        };
+        state.currentDraftWords.push(newWordObj);
         document.getElementById('wordInput').value = '';
 
         const curData = state.monthData[realYM];
-        curData.completedDays[realDay] = [...state.currentDraftWords];
+        if (!curData.completedDays[realDay]) {
+          curData.completedDays[realDay] = [];
+        }
+        // 기존 날짜입력 단어들은 유지하고 일반 단어들만 현재 드래프트 기준으로 동기화
+        const dateInputWords = curData.completedDays[realDay].filter(w => w.isDateInput);
+        curData.completedDays[realDay] = [...dateInputWords, ...state.currentDraftWords];
 
         const totalDaysCount = Object.keys(curData.completedDays).length;
         if (totalDaysCount > 0 && totalDaysCount % 7 === 0 && state.currentDraftWords.length === 1) {
@@ -488,10 +495,11 @@
         if (targetDayWords.length < 10) {
           targetDayWords.push({
             text: actualWord,
-            bg: getRandomPastelBg()
+            bg: getRandomPastelBg(),
+            isDateInput: true // 💡 날짜 지정 입력으로 생성된 단어는 삭제 불가 처리를 위해 태그 지정
           });
           if (ym === realYM && targetDay === realDay) {
-            state.currentDraftWords = [...state.monthData[realYM].completedDays[realDay]];
+            state.currentDraftWords = [...state.monthData[realYM].completedDays[realDay].filter(w => !w.isDateInput)];
           }
           saveState();
           checkInputStatus();
@@ -526,7 +534,6 @@
 
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
-        // 스페이스바를 누르면 일반 단어 입력으로 처리
         addNormalWord();
       } 
       else if (e.key === 'Enter') {
@@ -540,10 +547,13 @@
       else if (e.key === 'Backspace' && input.value === '' && state.currentDraftWords.length > 0) {
         state.currentDraftWords.pop();
         const curData = state.monthData[realYM];
-        if (state.currentDraftWords.length === 0) {
-          delete curData.completedDays[realDay];
-        } else {
-          curData.completedDays[realDay] = [...state.currentDraftWords];
+        if (curData && curData.completedDays[realDay]) {
+          const dateInputWords = curData.completedDays[realDay].filter(w => w.isDateInput);
+          if (state.currentDraftWords.length === 0 && dateInputWords.length === 0) {
+            delete curData.completedDays[realDay];
+          } else {
+            curData.completedDays[realDay] = [...dateInputWords, ...state.currentDraftWords];
+          }
         }
         saveState();
         checkInputStatus();
@@ -555,7 +565,6 @@
       const input = document.getElementById('wordInput');
       const val = input.value;
       
-      // 모바일 키보드에서 스페이스바(공백) 입력 시 즉시 단어칸 생성
       if (val.includes(' ')) {
         const parts = val.split(' ');
         const firstPart = parts[0].trim();
@@ -629,7 +638,9 @@
 
         const existingIdx = sortedDays.findIndex(d => d.day === realDay);
         if (existingIdx >= 0) {
-          sortedDays[existingIdx].words = liveWords;
+          // 기존 날짜 지정 단어들과 라이브 타이핑 중인 단어들을 합쳐서 표시
+          const dateInputWords = sortedDays[existingIdx].words.filter(w => w.isDateInput);
+          sortedDays[existingIdx].words = [...dateInputWords, ...liveWords];
           sortedDays[existingIdx].isDraft = true;
         } else if (liveWords.length > 0) {
           sortedDays.push({
@@ -674,23 +685,33 @@
 
           box.style.backgroundColor = bgStr;
 
-          // 💡 조회 중인 월의 모든 단어 상자를 터치하여 삭제/편집 가능
-          if (!wordObj.isLiveType) {
+          // 💡 핵심 수정: 'isDateInput'(날짜 지정 입력)으로 생성된 단어는 삭제할 수 없도록 제외하고, 일반 단어만 터치 시 삭제 가능하도록 설정
+          if (!wordObj.isLiveType && !wordObj.isDateInput) {
             box.classList.add('deletable');
             box.title = '터치하여 단어 삭제';
             box.onclick = (e) => {
               e.stopPropagation();
-              dayData.words.splice(wIdx, 1);
+              // 해당 단어가 일반 드래프트 단어인지 확인 후 삭제
+              const draftIdx = state.currentDraftWords.findIndex(w => w.text === textStr);
+              if (draftIdx >= 0) {
+                state.currentDraftWords.splice(draftIdx, 1);
+              } else {
+                // 배열 내에서 직접 제거
+                const targetArr = dayData.words;
+                const idx = targetArr.findIndex(w => w === wordObj);
+                if (idx >= 0) targetArr.splice(idx, 1);
+              }
+
               const ym = state.activeYearMonth;
               const curMonthData = state.monthData[ym];
-              if (dayData.words.length === 0) {
+              const dateInputWords = curMonthData.completedDays[dayData.day] ? curMonthData.completedDays[dayData.day].filter(w => w.isDateInput) : [];
+              
+              if (state.currentDraftWords.length === 0 && dateInputWords.length === 0) {
                 delete curMonthData.completedDays[dayData.day];
               } else {
-                curMonthData.completedDays[dayData.day] = dayData.words.filter(w => !w.isLiveType);
+                curMonthData.completedDays[dayData.day] = [...dateInputWords, ...state.currentDraftWords];
               }
-              if (ym === realYM && dayData.day === realDay) {
-                state.currentDraftWords = curMonthData.completedDays[realDay] ? [...curMonthData.completedDays[realDay]] : [];
-              }
+
               saveState();
               checkInputStatus();
               renderStairs();
